@@ -94,38 +94,38 @@ class TwoDimensionalSSM(nn.Module):
         B2 = torch.sigmoid(self.B2) / 2
         return A1, A2, A3, A4, B1, B2
 
-    def compute_x_matrix(self, length):
-        # D each
+    def compute_x_matrix(self, kernel_dim):
+        # H x N each
         A1, A2, A3, A4, B1, B2 = self._calc_coeffs()
 
-        # l x l x L x D x n
-        x_h = torch.zeros(length, length, length ** 2, self.embed_dim, self.ndim)
-        x_v = torch.zeros(length, length, length ** 2, self.embed_dim, self.ndim)
-        zeros_vec = torch.zeros(length ** 2, self.embed_dim, self.ndim)
-        for i in range(length):
-            for j in range(length):
+        # l x l  D x N
+        x_h = torch.zeros(kernel_dim, kernel_dim, self.embed_dim, self.ndim)
+        x_v = torch.zeros(kernel_dim, kernel_dim, self.embed_dim, self.ndim)
+
+        zeros_vec = torch.zeros(self.embed_dim, self.ndim)
+        for i in range(kernel_dim):
+            for j in range(kernel_dim):
                 # L x D x n
-                x_h_i_minus_j = x_h[i, j - 1] if j - 1 >= 0 else zeros_vec
-                x_v_i_minus_j = x_v[i, j - 1] if j - 1 >= 0 else zeros_vec
+                if i == 0 and j == 0:
+                    x_h[i, j] = self.B1
+                    x_v[i, j] = self.B2
+                else:
+                    x_h_i_minus_j = x_h[i, j - 1] if j - 1 >= 0 else zeros_vec
+                    x_v_i_minus_j = x_v[i, j - 1] if j - 1 >= 0 else zeros_vec
 
-                x_h[i, j] = A1 * x_h_i_minus_j + A2 * x_v_i_minus_j
-                x_h[i, j, i * length + j] = B1
+                    x_h[i, j] = A1 * x_h_i_minus_j + A2 * x_v_i_minus_j
+                    x_h_minus_i_j = x_h[i - 1, j] if i - 1 >= 0 else zeros_vec
+                    x_v_minus_i_j = x_v[i - 1, j] if i - 1 >= 0 else zeros_vec
 
-                x_h_minus_i_j = x_h[i - 1, j] if i - 1 >= 0 else zeros_vec
-                x_v_minus_i_j = x_v[i - 1, j] if i - 1 >= 0 else zeros_vec
-
-                x_v[i, j] = A3 * x_h_minus_i_j + A4 * x_v_minus_i_j
-                x_v[i, j, i * length + j] = B2
+                    x_v[i, j] = A3 * x_h_minus_i_j + A4 * x_v_minus_i_j
         return x_h, x_v
 
     def _compute_kernel(self, length: int):
         self._kernel = None
 
-        # l x l x L x D x N
+        # l x l x D x N
         x_h_matrix, x_v_matrix = self.compute_x_matrix(length)
         # L x L x D x N
-        x_h_matrix = x_h_matrix.reshape(length ** 2, length ** 2, self.embed_dim, self.ndim)
-        x_v_matrix = x_v_matrix.reshape(length ** 2, length ** 2, self.embed_dim, self.ndim)
 
         # L x L x H
         output_horizontal = torch.einsum("l k D N ,H N ->l k H", x_h_matrix, self.C1)
