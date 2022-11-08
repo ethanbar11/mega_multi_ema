@@ -32,6 +32,7 @@ class TwoDimensionalSSM(nn.Module):
         self.is_2_dim = True
         self.truncation = truncation
         self.embed_dim = embed_dim
+        self.bidirectional = bidirectional
         self.ndim = ndim
 
         # TODO: Add support in ndim>1 bidirectionality, and truncation
@@ -191,16 +192,23 @@ class TwoDimensionalSSM(nn.Module):
         # L x B x D, B x D x N
         return out.permute(2, 0, 1), h
 
-    def one_step(self, x, hx=None):
-        p, q = self.coeffs()
-        # (D x N) x (B x D x 1) -> B x D x N
-        h = (p * self.beta).squeeze(-1) * x
-        if hx is not None:
-            h = h + q.squeeze(-1) * hx
+    def one_step(self, x, state_h=None, state_v=None):
+        # X is sized B x D
+        B = x.shape[0]
+        D = x.shape[1]
+
+        # D x N x 1
+        A1, A2, A3, A4, B1, B2 = self.coeffs()
+
+        #
+        next_state_h = A1 * state_h + A2 * state_v + B1 * x
+        next_state_v = A3 * state_h + A4 * state_v + B2 * x
+
+        out1 = torch.einsum('bdn,dn -> bd', next_state_h, self.C1 * self.scale)
+        out2 = torch.einsum('bdn,dn -> bd', next_state_v, self.C2 * self.scale)
         # B x D
-        out = torch.einsum('bdn,dn->bd', h, self.gamma * self.scale)
-        # 1 x B x D, B x D x N
-        return out.unsqueeze(0), h
+        out = out1 + out2
+        return out, next_state_h, next_state_v
 
     def forward(
             self,
@@ -215,8 +223,8 @@ class TwoDimensionalSSM(nn.Module):
                 padding elements are indicated by 1s.
         """
 
-        L, bsz, embed_dim = x.size()
-        l = int(math.sqrt(L))
+        seq_len, bsz, embed_dim = x.size()
+
         assert embed_dim == self.embed_dim
 
         # L x B x D
@@ -227,24 +235,65 @@ class TwoDimensionalSSM(nn.Module):
         if padding_mask is not None:
             x = x * (1.0 - padding_mask.unsqueeze(1).type_as(x))
 
-        # L x L x D
-        k = self.kernel(l)
+        assert not self.bidirectional or incremental_state is None, 'Bidirectional EMA does not support incremental state'
+        if incremental_state is not None:
+            saved_state = self._get_input_buffer(incremental_state)
+            if 'prev_state' in saved_state:
+                h = saved_state['prev_state']
+            else:
+                h = None
+            out, h = self.step(x, seq_len, hx=h)
+            saved_state['prev_state'] = h
+            self._set_input_buffer(incremental_state, saved_state)
+            # B x D -> 1 x B x D
+            out = F.silu(out + residual)
+        else:
+            # D x L
+            fft_len = seq_len
+            fft_len = int(math.sqrt(fft_len))
+            k = self.kernel(fft_len).permute(2, 0, 1)
+            s = 0
+            kernel_size = k.size(1)
+            x = x.view(bsz, embed_dim, int(math.sqrt(seq_len)), int(math.sqrt(seq_len)))
+            if self.bidirectional:
+                if self.is_2_dim:
+                    kernels = list(
+                        torch.split(k, [self.embed_dim for i in range(4)], dim=0))  # 4 kernels, one for each direction.
+                    kernels[0] = F.pad(kernels[0], (0, kernel_size - 1, 0, kernel_size - 1))
+                    kernels[1] = F.pad(kernels[1].flip(0), (0, kernel_size - 1, kernel_size - 1, 0))
+                    kernels[2] = F.pad(kernels[2].flip(1), (kernel_size - 1, 0, 0, kernel_size - 1))
+                    kernels[3] = F.pad(kernels[3].flip([0, 1]), (kernel_size - 1, 0, kernel_size - 1, 0,))
+                    k = kernels[0] + kernels[1] + kernels[2] + kernels[3]
+                    x = F.pad(x, (kernel_size - 1, 0, kernel_size - 1, 0))
+                else:
+                    k1, k2 = torch.split(k, [self.embed_dim, self.embed_dim, self], dim=0)
 
-        # if self.bidirectional:
-        #     k1, k2 = torch.split(k, [self.embed_dim, self.embed_dim], dim=0)
-        #     # D x 2*L-1
-        #     k = F.pad(k1, (kernel_size - 1, 0)) + F.pad(k2.flip(-1), (0, kernel_size - 1))
-        #     x = F.pad(x, (kernel_size - 1, 0))
-        #     fft_len = fft_len + kernel_size - 1
-        #     s = 2 * kernel_size - 2
+                    # D x 2*L-1
+                    k = F.pad(k1, (kernel_size - 1, 0, kernel_size - 1, 0)) + F.pad(k2.flip(-1),
+                                                                                    (
+                                                                                        0, kernel_size - 1, 0,
+                                                                                        kernel_size - 1))
+                    # TODO: Why are they padding X here?
+                    x = F.pad(x, (kernel_size - 1, 0))
+                fft_len = fft_len + kernel_size - 1
+                s = 2 * kernel_size - 2
 
-        # k_f = torch.fft.rfft(k.float(), n=2 * fft_len)
-        # x_f = torch.fft.rfft(x.float(), n=2 * fft_len)
-        # B x D x L
-        out = torch.fft.irfft(x_f * k_f, n=2 * fft_len)[..., s:s + seq_len]
-        out = out.type_as(x)
-        # B x D x L -> L x B x D
-        out = F.silu(out.permute(2, 0, 1) + residual)
+            if self.is_2_dim:
+                two_dim_seq_len = int(math.sqrt(seq_len))
+                k_f = torch.fft.rfft2(k.float(), s=(2 * fft_len, 2 * fft_len))
+                x_f = torch.fft.rfft2(x.float(), s=(2 * fft_len, 2 * fft_len))
+                out = torch.fft.irfft2(x_f * k_f, s=(2 * fft_len, 2 * fft_len))[..., s:two_dim_seq_len + s,
+                      s:two_dim_seq_len + s]
+                out = out.type_as(x)
+                out = rearrange(out, 'b d l1 l2 -> b d (l1 l2)')
+            else:
+                k_f = torch.fft.rfft(k.float(), n=2 * fft_len)
+                x_f = torch.fft.rfft(x.float(), n=2 * fft_len)
+                # B x D x L
+                out = torch.fft.irfft(x_f * k_f, n=2 * fft_len)[..., s:s + seq_len]
+                out = out.type_as(x)
+            # B x D x L -> L x B x D
+            out = F.silu(out.permute(2, 0, 1) + residual)
 
         return out
 
