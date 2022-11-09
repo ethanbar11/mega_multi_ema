@@ -17,7 +17,7 @@ from fairseq.incremental_decoding_utils import with_incremental_state
 from fairseq.modules.fairseq_dropout import FairseqDropout, FairseqFeatureDropout
 from fairseq.modules.relative_positional_bias import SimpleRelativePositionalBias, RotaryRelativePositionalBias
 from fairseq.modules.sequence_norm import SequenceNorm
-from fairseq.modules.exponential_moving_average import MultiHeadEMA
+from fairseq.modules.two_d_ssm_recursive import TwoDimensionalSSM
 
 
 @with_incremental_state
@@ -28,26 +28,26 @@ class MovingAverageGatedAttention(nn.Module):
     """
 
     def __init__(
-        self,
-        embed_dim,
-        zdim,
-        hdim,
-        ndim,
-        dropout=0.0,
-        attention_dropout=0.0,
-        hidden_dropout=0.0,
-        activation='silu',
-        attention_activation='softmax',
-        bidirectional=False,
-        chunk_size=-1,
-        truncation=None,
-        norm_type='layernorm',
-        prenorm=True,
-        norm_affine=True,
-        feature_dropout=False,
-        rel_pos_bias='simple',
-        max_positions=1024,
-        export=False,
+            self,
+            embed_dim,
+            zdim,
+            hdim,
+            ndim,
+            dropout=0.0,
+            attention_dropout=0.0,
+            hidden_dropout=0.0,
+            activation='silu',
+            attention_activation='softmax',
+            bidirectional=False,
+            chunk_size=-1,
+            truncation=None,
+            norm_type='layernorm',
+            prenorm=True,
+            norm_affine=True,
+            feature_dropout=False,
+            rel_pos_bias='simple',
+            max_positions=1024,
+            export=False,
     ):
         super().__init__()
 
@@ -69,7 +69,8 @@ class MovingAverageGatedAttention(nn.Module):
         self.prenorm = prenorm
         self.norm = SequenceNorm(norm_type, embed_dim, affine=norm_affine, export=export)
 
-        self.move = MultiHeadEMA(embed_dim, ndim=ndim, bidirectional=bidirectional, truncation=truncation)
+        # Changed to 2ssm
+        self.move = TwoDimensionalSSM(embed_dim, ndim=ndim, bidirectional=bidirectional, truncation=truncation)
 
         self.v_proj = nn.Linear(embed_dim, hdim)
         self.mx_proj = nn.Linear(embed_dim, zdim + hdim + 2 * embed_dim)
@@ -186,13 +187,13 @@ class MovingAverageGatedAttention(nn.Module):
         return attn_weights
 
     def forward(
-        self,
-        x,
-        padding_mask: Optional[Tensor] = None,
-        incremental_state: Optional[Dict[str, Dict[str, Optional[Tensor]]]] = None,
-        need_weights: bool = False,
-        attn_mask: Optional[Tensor] = None,
-        before_attn_fn: bool = False,
+            self,
+            x,
+            padding_mask: Optional[Tensor] = None,
+            incremental_state: Optional[Dict[str, Dict[str, Optional[Tensor]]]] = None,
+            need_weights: bool = False,
+            attn_mask: Optional[Tensor] = None,
+            before_attn_fn: bool = False,
     ) -> Tuple[Tensor, Optional[Tensor]]:
         """Input shape: Time x Batch x Channel
 
@@ -349,7 +350,8 @@ class MovingAverageGatedAttention(nn.Module):
         else:
             return out, None
 
-    def _get_input_buffer(self, incremental_state: Optional[Dict[str, Dict[str, Optional[Tensor]]]]) -> Dict[str, Optional[Tensor]]:
+    def _get_input_buffer(self, incremental_state: Optional[Dict[str, Dict[str, Optional[Tensor]]]]) -> Dict[
+        str, Optional[Tensor]]:
         result = self.get_incremental_state(incremental_state, "attn_state")
         if result is not None:
             return result
@@ -357,7 +359,8 @@ class MovingAverageGatedAttention(nn.Module):
             empty_result: Dict[str, Optional[Tensor]] = {}
             return empty_result
 
-    def _set_input_buffer(self, incremental_state: Dict[str, Dict[str, Optional[Tensor]]], buffer: Dict[str, Optional[Tensor]]):
+    def _set_input_buffer(self, incremental_state: Dict[str, Dict[str, Optional[Tensor]]],
+                          buffer: Dict[str, Optional[Tensor]]):
         return self.set_incremental_state(incremental_state, "attn_state", buffer)
 
     @torch.jit.export
@@ -376,10 +379,10 @@ class MovingAverageGatedAttention(nn.Module):
 
     @staticmethod
     def _append_prev_padding_mask(
-        padding_mask: Optional[Tensor],
-        prev_padding_mask: Optional[Tensor],
-        batch_size: int,
-        seq_len: int,
+            padding_mask: Optional[Tensor],
+            prev_padding_mask: Optional[Tensor],
+            batch_size: int,
+            seq_len: int,
     ) -> Optional[Tensor]:
         # saved key padding masks have shape (bsz, seq_len)
         if prev_padding_mask is not None and padding_mask is not None:
@@ -399,5 +402,7 @@ class MovingAverageGatedAttention(nn.Module):
 
     def extra_repr(self) -> str:
         return 'edim={}, zdim={}, hdim={}, ndim={}, chunk={}, attn_act={}, prenorm={}'.format(self.embed_dim, self.zdim,
-                                                                                  self.hdim, self.ndim, self.chunk_size,
-                                                                                  self.attention_activation, self.prenorm)
+                                                                                              self.hdim, self.ndim,
+                                                                                              self.chunk_size,
+                                                                                              self.attention_activation,
+                                                                                              self.prenorm)

@@ -32,24 +32,25 @@ class TwoDimensionalSSM(nn.Module):
         self.is_2_dim = True
         self.truncation = truncation
         self.embed_dim = embed_dim
-        self.bidirectional = bidirectional
+        self.bidirectional = False
         self.ndim = ndim
 
         # TODO: Add support in ndim>1 bidirectionality, and truncation
-        # self.bidirectional = bidirectional
+        self.bidirectional = bidirectional
         self.scale = math.sqrt(1.0 / self.ndim)
+        self.kernel_dim = 4 * embed_dim if self.bidirectional else embed_dim
 
         # D x N x 1
-        self.A1 = nn.Parameter(torch.Tensor(self.embed_dim, self.ndim))
-        self.A2 = nn.Parameter(torch.Tensor(self.embed_dim, self.ndim))
-        self.A3 = nn.Parameter(torch.Tensor(self.embed_dim, self.ndim))
-        self.A4 = nn.Parameter(torch.Tensor(self.embed_dim, self.ndim))
-        self.B1 = nn.Parameter(torch.Tensor(self.embed_dim, self.ndim))
-        self.B2 = nn.Parameter(torch.Tensor(self.embed_dim, self.ndim))
+        self.A1 = nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim))
+        self.A2 = nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim))
+        self.A3 = nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim))
+        self.A4 = nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim))
+        self.B1 = nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim))
+        self.B2 = nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim))
 
         # D x N
-        self.C1 = nn.Parameter(torch.Tensor(self.embed_dim, self.ndim))
-        self.C2 = nn.Parameter(torch.Tensor(self.embed_dim, self.ndim))
+        self.C1 = nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim))
+        self.C2 = nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim))
 
         # sized D because this is a residual connection (element-wise)
         self.omega = nn.Parameter(torch.Tensor(embed_dim))
@@ -100,23 +101,23 @@ class TwoDimensionalSSM(nn.Module):
         A1, A2, A3, A4, B1, B2 = self._calc_coeffs()
 
         # l x l  D x N
-        x_h = torch.zeros(kernel_dim, kernel_dim, self.embed_dim, self.ndim)
-        x_v = torch.zeros(kernel_dim, kernel_dim, self.embed_dim, self.ndim)
+        x_h = torch.zeros(kernel_dim, kernel_dim, self.kernel_dim, self.ndim).to(A1.device)
+        x_v = torch.zeros(kernel_dim, kernel_dim, self.kernel_dim, self.ndim).to(A1.device)
 
-        zeros_vec = torch.zeros(self.embed_dim, self.ndim)
+        zeros_vec = torch.zeros(self.kernel_dim, self.ndim).to(A1.device)
         for i in range(kernel_dim):
             for j in range(kernel_dim):
                 # L x D x n
                 if i == 0 and j == 0:
-                    x_h[i, j] = self.B1
-                    x_v[i, j] = self.B2
+                    x_h[i, j] = B1
+                    x_v[i, j] = B2
                 else:
-                    x_h_i_minus_j = x_h[i, j - 1] if j - 1 >= 0 else zeros_vec
-                    x_v_i_minus_j = x_v[i, j - 1] if j - 1 >= 0 else zeros_vec
+                    x_h_i_minus_j = x_h[i, j - 1].data if j - 1 >= 0 else zeros_vec
+                    x_v_i_minus_j = x_v[i, j - 1].data if j - 1 >= 0 else zeros_vec
 
                     x_h[i, j] = A1 * x_h_i_minus_j + A2 * x_v_i_minus_j
-                    x_h_minus_i_j = x_h[i - 1, j] if i - 1 >= 0 else zeros_vec
-                    x_v_minus_i_j = x_v[i - 1, j] if i - 1 >= 0 else zeros_vec
+                    x_h_minus_i_j = x_h[i - 1, j].data if i - 1 >= 0 else zeros_vec
+                    x_v_minus_i_j = x_v[i - 1, j].data if i - 1 >= 0 else zeros_vec
 
                     x_v[i, j] = A3 * x_h_minus_i_j + A4 * x_v_minus_i_j
         return x_h, x_v
@@ -129,8 +130,8 @@ class TwoDimensionalSSM(nn.Module):
         # L x L x D x N
 
         # L x L x H
-        output_horizontal = torch.einsum("l k D N ,H N ->l k H", x_h_matrix, self.C1)
-        output_vertical = torch.einsum("l k D N ,H N ->l k H", x_v_matrix, self.C2)
+        output_horizontal = torch.einsum("l k H N ,H N ->l k H", x_h_matrix, self.C1 * self.scale)
+        output_vertical = torch.einsum("l k H N ,H N ->l k H", x_v_matrix, self.C2 * self.scale)
 
         # L x L x H
         output = output_horizontal + output_vertical
@@ -192,7 +193,11 @@ class TwoDimensionalSSM(nn.Module):
         # L x B x D, B x D x N
         return out.permute(2, 0, 1), h
 
-    def one_step(self, x, state_h=None, state_v=None):
+    def one_step(self, x, state_h_left, state_v_left=None, state_h_up=None, state_v_up=None):
+        state_h_left = state_h_left if state_h_left is not None else torch.zeros(self.embed_dim, self.ndim).to(x)
+        state_v_left = state_v_left if state_v_left is not None else torch.zeros(self.embed_dim, self.ndim).to(x)
+        state_h_up = state_h_up if state_h_up is not None else torch.zeros(self.embed_dim, self.ndim).to(x)
+        state_v_up = state_v_up if state_v_up is not None else torch.zeros(self.embed_dim, self.ndim).to(x)
         # X is sized B x D
         B = x.shape[0]
         D = x.shape[1]
@@ -201,8 +206,8 @@ class TwoDimensionalSSM(nn.Module):
         A1, A2, A3, A4, B1, B2 = self.coeffs()
 
         #
-        next_state_h = A1 * state_h + A2 * state_v + B1 * x
-        next_state_v = A3 * state_h + A4 * state_v + B2 * x
+        next_state_h = A1 * state_h_left + A2 * state_v_left + B1 * x
+        next_state_v = A3 * state_h_up + A4 * state_v_up + B2 * x
 
         out1 = torch.einsum('bdn,dn -> bd', next_state_h, self.C1 * self.scale)
         out2 = torch.einsum('bdn,dn -> bd', next_state_v, self.C2 * self.scale)
@@ -329,15 +334,66 @@ class TwoDimensionalSSM(nn.Module):
                                                                          self.truncation)
 
 
-def test_step_and_matrix():
-    embed_dim = 5
-    ssm = TwoDimensionalSSM(embed_dim)
-    L = 4
+def run_steps(ssm2d, x, residual_and_silu=False):
+    # X shape is l,l,B,embed_dim
+    L = x.shape[0]
+    l = int(math.sqrt(L))
+    B = x.shape[1]
+    D = x.shape[2]
+    # x = x.permute(1, 2, 0)  # L, B ,D -> B, D, L
+    x = x.view(l, l, B, D, 1)
+    orig_x = x.clone().squeeze(-1) * ssm2d.omega
+    results = torch.zeros_like(x).squeeze(-1)
+    states_h = torch.zeros(l, l, B, ssm2d.embed_dim, ssm2d.ndim)  # L, B, embed_dim, n_dim
+    states_v = torch.zeros(l, l, B, ssm2d.embed_dim, ssm2d.ndim)  # L, B, embed_dim, n_dim
+    for i in range(x.size(0)):
+        for j in range(x.size(1)):
+            state_h_left = states_h[i, j - 1] if j - 1 >= 0 else None
+            state_v_left = states_v[i, j - 1] if j - 1 >= 0 else None
+            state_h_up = states_h[i - 1, j] if i - 1 >= 0 else None
+            state_v_up = states_v[i - 1, j] if i - 1 >= 0 else None
+            y, state_h, state_v = ssm2d.one_step(x[i, j], state_h_left, state_v_left, state_h_up, state_v_up)
+            results[i, j] = y
+            states_h[i, j] = state_h
+            states_v[i, j] = state_v
+
+    if residual_and_silu:
+        results += orig_x
+        results = F.silu(results)
+
+    return results, states_h
+
+
+def test_ema():
+    ndim = 10
+    embed_dim = 20
+    bidirectional = False
+    # truncation = None
+    seed = 42
+    torch.manual_seed(seed)
+    ssm2d = TwoDimensionalSSM(embed_dim, ndim, bidirectional)
+
+    # X creation
     B = 1
-    # L x B x H
+    L = 32 ** 2
     x = torch.randn(L, B, embed_dim)
-    y = ssm(x)
+    results_step, states_step = run_steps(ssm2d, x, True)
+    results_step = results_step.view(L, B, embed_dim)
+    conv_y = ssm2d(x)
+    print('The mean difference is:', torch.norm(conv_y[:10] - results_step[:10]).mean())
+    print('The difference is:', (conv_y - results_step).squeeze(-1).squeeze(-1))
+    assert torch.allclose(conv_y, results_step, atol=1e-4)
+
+
+# def test_step_and_matrix():
+#     embed_dim = 5
+#     ssm = TwoDimensionalSSM(embed_dim)
+#     L = 4
+#     B = 1
+#     # L x B x H
+#     x = torch.randn(L, B, embed_dim)
+#     y = ssm(x)
 
 
 if __name__ == '__main__':
-    test_step_and_matrix()
+    test_ema()

@@ -6,9 +6,12 @@
 """
 Legacy entry point. Use fairseq_cli/train.py or fairseq-train instead.
 """
+import torch
 
 from fairseq_cli.train import cli_main
 
 
 if __name__ == '__main__':
+    import os
+    os.environ['CUDA_VISIBLE_DEVICES'] = '1'
     cli_main()
