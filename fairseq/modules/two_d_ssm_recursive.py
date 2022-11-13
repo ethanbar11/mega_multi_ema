@@ -14,6 +14,8 @@ from torch import Tensor, nn
 from fairseq.incremental_decoding_utils import with_incremental_state
 
 
+
+
 @with_incremental_state
 class TwoDimensionalSSM(nn.Module):
     """Exponential Moving Average Layer.
@@ -43,8 +45,6 @@ class TwoDimensionalSSM(nn.Module):
         # D x N x 1
         self.A1 = nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim))
         self.A2 = nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim))
-        self.A3 = nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim))
-        self.A4 = nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim))
         self.B1 = nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim))
         self.B2 = nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim))
 
@@ -54,6 +54,9 @@ class TwoDimensionalSSM(nn.Module):
 
         # sized D because this is a residual connection (element-wise)
         self.omega = nn.Parameter(torch.Tensor(embed_dim))
+
+        self.horizontal_flow = None
+        self.vertical_flow = None
 
         self._kernel = None
         self._coeffs = None
@@ -74,8 +77,6 @@ class TwoDimensionalSSM(nn.Module):
             # delta & alpha
             nn.init.normal_(self.A1, mean=0.0, std=0.2)
             nn.init.normal_(self.A2, mean=0.0, std=0.2)
-            nn.init.normal_(self.A3, mean=0.0, std=0.2)
-            nn.init.normal_(self.A4, mean=0.0, std=0.2)
             nn.init.normal_(self.B1, mean=0.0, std=0.2)
             nn.init.normal_(self.B2, mean=0.0, std=0.2)
             # TODO: After expanding to n_dim>1 , checkout what's being done with beta in EMA
@@ -90,36 +91,21 @@ class TwoDimensionalSSM(nn.Module):
         # D x N x 1
         A1 = torch.sigmoid(self.A1) / 2
         A2 = torch.sigmoid(self.A2) / 2
-        A3 = torch.sigmoid(self.A3) / 2
-        A4 = torch.sigmoid(self.A4) / 2
         B1 = torch.sigmoid(self.B1) / 2
         B2 = torch.sigmoid(self.B2) / 2
-        return A1, A2, A3, A4, B1, B2
+        return A1, A2, B1, B2
 
     def compute_x_matrix(self, kernel_dim):
         # H x N each
-        A1, A2, A3, A4, B1, B2 = self._calc_coeffs()
-
+        A1, A2 B1, B2 = self._calc_coeffs()
+        if self.horizontal_flow is None:
+            self.horizontal_flow = get_horizontal_flow(kernel_dim).to(A1.device)
+            self.vertical_flow = get_veritcal_flow(kernel_dim).to(A1.device)
         # l x l  D x N
         x_h = torch.zeros(kernel_dim, kernel_dim, self.kernel_dim, self.ndim).to(A1.device)
         x_v = torch.zeros(kernel_dim, kernel_dim, self.kernel_dim, self.ndim).to(A1.device)
 
         zeros_vec = torch.zeros(self.kernel_dim, self.ndim).to(A1.device)
-        for i in range(kernel_dim):
-            for j in range(kernel_dim):
-                # L x D x n
-                if i == 0 and j == 0:
-                    x_h[i, j] = B1
-                    x_v[i, j] = B2
-                else:
-                    x_h_i_minus_j = x_h[i, j - 1].data if j - 1 >= 0 else zeros_vec
-                    x_v_i_minus_j = x_v[i, j - 1].data if j - 1 >= 0 else zeros_vec
-
-                    x_h[i, j] = A1 * x_h_i_minus_j + A2 * x_v_i_minus_j
-                    x_h_minus_i_j = x_h[i - 1, j].data if i - 1 >= 0 else zeros_vec
-                    x_v_minus_i_j = x_v[i - 1, j].data if i - 1 >= 0 else zeros_vec
-
-                    x_v[i, j] = A3 * x_h_minus_i_j + A4 * x_v_minus_i_j
         return x_h, x_v
 
     def _compute_kernel(self, length: int):
@@ -365,8 +351,8 @@ def run_steps(ssm2d, x, residual_and_silu=False):
 
 
 def test_ema():
-    ndim = 10
-    embed_dim = 20
+    ndim = 3
+    embed_dim = 2
     bidirectional = False
     # truncation = None
     seed = 42
