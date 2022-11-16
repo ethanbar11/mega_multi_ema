@@ -6,14 +6,13 @@
 
 import math
 from typing import Dict, Optional, Tuple
-from einops import rearrange
+from einops import rearrange, einsum
 import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
 from fairseq.incremental_decoding_utils import with_incremental_state
-
-
+from fairseq.modules.ssm_coefficient import CoeffCalculator
 
 
 @with_incremental_state
@@ -29,8 +28,10 @@ class TwoDimensionalSSM(nn.Module):
             ndim=2,
             bidirectional=False,
             truncation=None,
+            L=32 ** 2
     ):
         super().__init__()
+        print(L)
         self.is_2_dim = True
         self.truncation = truncation
         self.embed_dim = embed_dim
@@ -41,6 +42,11 @@ class TwoDimensionalSSM(nn.Module):
         self.bidirectional = bidirectional
         self.scale = math.sqrt(1.0 / self.ndim)
         self.kernel_dim = 4 * embed_dim if self.bidirectional else embed_dim
+
+        # TODO: Change this where we'll work with other benchmarks
+        self.one_side_length = int(math.sqrt(L))
+        self.coeff_calc = CoeffCalculator(self.one_side_length)
+        self.coeff_calc.calc_coeffs_lazy()
 
         # D x N x 1
         self.A1 = nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim))
@@ -97,30 +103,42 @@ class TwoDimensionalSSM(nn.Module):
 
     def compute_x_matrix(self, kernel_dim):
         # H x N each
-        A1, A2 B1, B2 = self._calc_coeffs()
-        if self.horizontal_flow is None:
-            self.horizontal_flow = get_horizontal_flow(kernel_dim).to(A1.device)
-            self.vertical_flow = get_veritcal_flow(kernel_dim).to(A1.device)
+        A1, A2, B1, B2 = self._calc_coeffs()
+        power_dim = kernel_dim * 2
         # l x l  D x N
-        x_h = torch.zeros(kernel_dim, kernel_dim, self.kernel_dim, self.ndim).to(A1.device)
-        x_v = torch.zeros(kernel_dim, kernel_dim, self.kernel_dim, self.ndim).to(A1.device)
 
-        zeros_vec = torch.zeros(self.kernel_dim, self.ndim).to(A1.device)
-        return x_h, x_v
+        A_1_powers = torch.exp(
+            einsum(torch.arange(power_dim).to(A1.device), torch.log(A1), 'l , h n -> l h n'))
+        A_2_powers = torch.exp(einsum(torch.arange(power_dim).to(A1.device), torch.log(A2), 'l , h n -> l h n'))
+        B_powers = torch.stack([B1, B2], dim=0)
+        calc = einsum(A_1_powers, A_2_powers, 'l h n ,l2 h n -> l l2 h n').view(power_dim ** 2, self.kernel_dim,
+                                                                                self.ndim)
+
+        # This is the vector I'm going to multiply by the coefficients' matrix.
+        mul_vec = einsum(B_powers, calc, 'l h n ,l2 h n -> l l2 h n').view(power_dim ** 2 * 2, self.kernel_dim,
+                                                                           self.ndim)
+        coeff_hor = self.coeff_calc.final_coeffs_matrix_horizontal
+        coeff_ver = self.coeff_calc.final_coeffs_matrix_vertical
+
+        final_hor = einsum(mul_vec, coeff_hor, 'l h n ,l2 l -> l2 h n')
+        final_ver = einsum(mul_vec, coeff_ver, 'l h n ,l2 l -> l2 h n')
+        return final_hor, final_ver
 
     def _compute_kernel(self, length: int):
         self._kernel = None
+        A1, A2, B1, B2 = self.coeffs()
 
         # l x l x D x N
         x_h_matrix, x_v_matrix = self.compute_x_matrix(length)
         # L x L x D x N
 
         # L x L x H
-        output_horizontal = torch.einsum("l k H N ,H N ->l k H", x_h_matrix, self.C1 * self.scale)
-        output_vertical = torch.einsum("l k H N ,H N ->l k H", x_v_matrix, self.C2 * self.scale)
+        output_horizontal = einsum(x_h_matrix, self.C1 * self.scale, "l H N ,H N ->l H")
+        output_vertical = einsum(x_v_matrix, self.C2 * self.scale, "l H N ,H N ->l H")
 
         # L x L x H
         output = output_horizontal + output_vertical
+        output = output.view(length, length, self.kernel_dim)
 
         return output
 
@@ -139,7 +157,7 @@ class TwoDimensionalSSM(nn.Module):
         else:
             if self._kernel is None or self._kernel.size(-1) < kernel_size:
                 self._kernel = self._compute_kernel(kernel_size)
-            return self._kernel[..., :kernel_size]
+            return self._kernel
 
     def step(self, x, length, hx=None):
         if length == 1:
@@ -189,11 +207,11 @@ class TwoDimensionalSSM(nn.Module):
         D = x.shape[1]
 
         # D x N x 1
-        A1, A2, A3, A4, B1, B2 = self.coeffs()
+        A1, A2, B1, B2 = self.coeffs()
 
         #
         next_state_h = A1 * state_h_left + A2 * state_v_left + B1 * x
-        next_state_v = A3 * state_h_up + A4 * state_v_up + B2 * x
+        next_state_v = A2 * state_h_up + A1 * state_v_up + B2 * x
 
         out1 = torch.einsum('bdn,dn -> bd', next_state_h, self.C1 * self.scale)
         out2 = torch.einsum('bdn,dn -> bd', next_state_v, self.C2 * self.scale)
@@ -351,21 +369,21 @@ def run_steps(ssm2d, x, residual_and_silu=False):
 
 
 def test_ema():
-    ndim = 3
-    embed_dim = 2
+    ndim = 5
+    embed_dim = 1
+    L = 10 ** 2
     bidirectional = False
     # truncation = None
     seed = 42
     torch.manual_seed(seed)
-    ssm2d = TwoDimensionalSSM(embed_dim, ndim, bidirectional)
+    ssm2d = TwoDimensionalSSM(embed_dim, ndim, bidirectional, L=L)
 
     # X creation
-    B = 1
-    L = 32 ** 2
+    B = 10
     x = torch.randn(L, B, embed_dim)
+    conv_y = ssm2d(x)
     results_step, states_step = run_steps(ssm2d, x, True)
     results_step = results_step.view(L, B, embed_dim)
-    conv_y = ssm2d(x)
     print('The mean difference is:', torch.norm(conv_y[:10] - results_step[:10]).mean())
     print('The difference is:', (conv_y - results_step).squeeze(-1).squeeze(-1))
     assert torch.allclose(conv_y, results_step, atol=1e-4)

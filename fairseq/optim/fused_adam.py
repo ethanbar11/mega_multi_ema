@@ -177,7 +177,7 @@ class FusedAdamV1(torch.optim.Optimizer):
 
                 exp_avg = state['exp_avg']
                 exp_avg_sq = state['exp_avg_sq']
-                beta1, beta2 = group['betas']
+                beta1, beta2 = (0.91,0.92)#group['betas']
 
                 state['step'] += 1
 
