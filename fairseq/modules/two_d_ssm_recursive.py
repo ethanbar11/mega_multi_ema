@@ -49,14 +49,14 @@ class TwoDimensionalSSM(nn.Module):
         self.coeff_calc.calc_coeffs_lazy()
 
         # D x N x 1
-        self.A1 = nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim))
-        self.A2 = nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim))
-        self.B1 = nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim))
-        self.B2 = nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim))
+        self.A1 = nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim)).type(torch.DoubleTensor)
+        self.A2 = nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim)).type(torch.DoubleTensor)
+        self.B1 = nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim)).type(torch.DoubleTensor)
+        self.B2 = nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim)).type(torch.DoubleTensor)
 
         # D x N
-        self.C1 = nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim))
-        self.C2 = nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim))
+        self.C1 = nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim)).type(torch.DoubleTensor)
+        self.C2 = nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim)).type(torch.DoubleTensor)
 
         # sized D because this is a residual connection (element-wise)
         self.omega = nn.Parameter(torch.Tensor(embed_dim))
@@ -116,7 +116,7 @@ class TwoDimensionalSSM(nn.Module):
 
         # This is the vector I'm going to multiply by the coefficients' matrix.
         mul_vec = einsum(B_powers, calc, 'l h n ,l2 h n -> l l2 h n').view(power_dim ** 2 * 2, self.kernel_dim,
-                                                                           self.ndim)
+                                                                           self.ndim).type(torch.DoubleTensor)
         coeff_hor = self.coeff_calc.final_coeffs_matrix_horizontal
         coeff_ver = self.coeff_calc.final_coeffs_matrix_vertical
 
@@ -126,8 +126,7 @@ class TwoDimensionalSSM(nn.Module):
 
     def _compute_kernel(self, length: int):
         self._kernel = None
-        A1, A2, B1, B2 = self.coeffs()
-
+        A1, A2, B1, B2 = self._calc_coeffs()
         # l x l x D x N
         x_h_matrix, x_v_matrix = self.compute_x_matrix(length)
         # L x L x D x N
@@ -135,7 +134,7 @@ class TwoDimensionalSSM(nn.Module):
         # L x L x H
         output_horizontal = einsum(x_h_matrix, self.C1 * self.scale, "l H N ,H N ->l H")
         output_vertical = einsum(x_v_matrix, self.C2 * self.scale, "l H N ,H N ->l H")
-
+        cell_2 = (self.C1* self.scale) @ (A1 * B2 + A2 * B1).T
         # L x L x H
         output = output_horizontal + output_vertical
         output = output.view(length, length, self.kernel_dim)
@@ -369,9 +368,9 @@ def run_steps(ssm2d, x, residual_and_silu=False):
 
 
 def test_ema():
-    ndim = 5
-    embed_dim = 1
-    L = 10 ** 2
+    ndim = 640
+    embed_dim = 16
+    L = 32 ** 2
     bidirectional = False
     # truncation = None
     seed = 42
@@ -379,7 +378,7 @@ def test_ema():
     ssm2d = TwoDimensionalSSM(embed_dim, ndim, bidirectional, L=L)
 
     # X creation
-    B = 10
+    B = 40
     x = torch.randn(L, B, embed_dim)
     conv_y = ssm2d(x)
     results_step, states_step = run_steps(ssm2d, x, True)
