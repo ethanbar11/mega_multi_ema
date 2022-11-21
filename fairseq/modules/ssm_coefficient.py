@@ -73,8 +73,8 @@ class CoeffCalculator:
         if os.path.exists(self.horizontal_cache_location) and os.path.exists(self.vertical_cache_location):
             horizontal = torch.load(self.horizontal_cache_location)
             if horizontal.shape[0] == self.L * self.L:
-                self.final_coeffs_matrix_horizontal = horizontal.type(torch.DoubleTensor)
-                self.final_coeffs_matrix_vertical = torch.load(self.vertical_cache_location).type(torch.DoubleTensor)
+                self.final_coeffs_matrix_horizontal = horizontal
+                self.final_coeffs_matrix_vertical = torch.load(self.vertical_cache_location)
                 return
         self.initialize_matrices()
         self.set_final_coeffs_matrix()
@@ -113,8 +113,8 @@ class CoeffCalculator:
                 self.x_h[ver][hor].as_coefficients_dict(), self.L)
             self.final_coeffs_matrix_vertical[i] = convert_coeffs_dict_to_vec(
                 self.x_v[ver][hor].as_coefficients_dict(), self.L)
-        self.final_coeffs_matrix_horizontal = self.final_coeffs_matrix_horizontal.type(torch.DoubleTensor)
-        self.final_coeffs_matrix_vertical = self.final_coeffs_matrix_vertical.type(torch.DoubleTensor)
+        self.final_coeffs_matrix_horizontal = self.final_coeffs_matrix_horizontal
+        self.final_coeffs_matrix_vertical = self.final_coeffs_matrix_vertical
 
 
 if __name__ == '__main__':
