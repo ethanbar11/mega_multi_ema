@@ -66,8 +66,8 @@ class CoeffCalculator:
         self.final_coeffs_matrix_horizontal = torch.zeros(L * L, L * L * 8)
         self.final_coeffs_matrix_vertical = torch.zeros(L * L, L * L * 8)
         # Print files in current directory
-        self.horizontal_cache_location = '/home/ethan_baron/mega/coeffs_cache/horizontal.pt'
-        self.vertical_cache_location = '/home/ethan_baron/mega/coeffs_cache/vertical.pt'
+        self.horizontal_cache_location = './coeffs_cache/horizontal.pt'
+        self.vertical_cache_location = './coeffs_cache/vertical.pt'
 
     def calc_coeffs_lazy(self):
         if os.path.exists(self.horizontal_cache_location) and os.path.exists(self.vertical_cache_location):

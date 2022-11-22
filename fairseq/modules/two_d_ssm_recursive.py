@@ -47,6 +47,8 @@ class TwoDimensionalSSM(nn.Module):
         self.one_side_length = int(math.sqrt(L))
         self.coeff_calc = CoeffCalculator(self.one_side_length)
         self.coeff_calc.calc_coeffs_lazy()
+        self.coeff_hor = self.coeff_calc.final_coeffs_matrix_horizontal.cuda()
+        self.coeff_ver = self.coeff_calc.final_coeffs_matrix_vertical.cuda()
 
         # D x N x 1
         self.A1 = nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim))
@@ -117,8 +119,8 @@ class TwoDimensionalSSM(nn.Module):
         # This is the vector I'm going to multiply by the coefficients' matrix.
         mul_vec = einsum(B_powers, calc, 'l h n ,l2 h n -> l l2 h n').view(power_dim ** 2 * 2, self.kernel_dim,
                                                                            self.ndim)
-        coeff_hor = self.coeff_calc.final_coeffs_matrix_horizontal
-        coeff_ver = self.coeff_calc.final_coeffs_matrix_vertical
+        coeff_hor = self.coeff_hor
+        coeff_ver = self.coeff_ver
 
         final_hor = einsum(mul_vec, coeff_hor, 'l h n ,l2 l -> l2 h n')
         final_ver = einsum(mul_vec, coeff_ver, 'l h n ,l2 l -> l2 h n')
