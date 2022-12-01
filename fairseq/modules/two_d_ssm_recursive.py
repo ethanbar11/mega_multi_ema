@@ -15,6 +15,13 @@ from fairseq.incremental_decoding_utils import with_incremental_state
 from fairseq.modules.ssm_coefficient import CoeffCalculator
 
 
+def plot_heatmap(x, title):
+    import matplotlib.pyplot as plt
+    plt.imshow(x.cpu().detach().numpy(), cmap='hot', interpolation='nearest')
+    plt.title(title)
+    plt.show()
+
+
 @with_incremental_state
 class TwoDimensionalSSM(nn.Module):
     """Exponential Moving Average Layer.
@@ -47,8 +54,8 @@ class TwoDimensionalSSM(nn.Module):
         self.one_side_length = int(math.sqrt(L))
         self.coeff_calc = CoeffCalculator(self.one_side_length)
         self.coeff_calc.calc_coeffs_lazy()
-        self.coeff_hor = self.coeff_calc.final_coeffs_matrix_horizontal.cuda()
-        self.coeff_ver = self.coeff_calc.final_coeffs_matrix_vertical.cuda()
+        self.coeff_hor = self.coeff_calc.final_coeffs_matrix_horizontal
+        self.coeff_ver = self.coeff_calc.final_coeffs_matrix_vertical
 
         # D x N x 1
         self.A1 = nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim))
@@ -271,7 +278,7 @@ class TwoDimensionalSSM(nn.Module):
             # D x L
             fft_len = seq_len
             fft_len = int(math.sqrt(fft_len))
-            k = self.kernel(fft_len).permute(2, 0, 1)
+            k = self.kernel(fft_len).permute(2, 0, 1) # H x L x L
             s = 0
             kernel_size = k.size(1)
             x = x.view(bsz, embed_dim, int(math.sqrt(seq_len)), int(math.sqrt(seq_len)))
@@ -280,13 +287,11 @@ class TwoDimensionalSSM(nn.Module):
                 kernels = list(
                     torch.split(k, [self.embed_dim for i in range(4)], dim=0))  # 4 kernels, one for each direction.
                 kernels[0] = kernels[0]
-                kernels[1] = kernels[1].flip(0)
-                kernels[2] = kernels[2].flip(1)
-                kernels[3] = kernels[3].flip([0, 1])
-                # fft_len = fft_len + kernel_size - 1
+                kernels[1] = kernels[1].flip(-2)
+                # kernels[2] = kernels[2].flip(1)
+                # kernels[3] = kernels[3].flip([0, 1])
                 out = None
-                # s = 2 * kernel_size - 2
-                for k in kernels:
+                for idx, k in enumerate(kernels):
                     k_f = torch.fft.rfft2(k.float(), s=(2 * fft_len, 2 * fft_len))
                     x_f = torch.fft.rfft2(x.float(), s=(2 * fft_len, 2 * fft_len))
                     if out is None:
@@ -297,6 +302,8 @@ class TwoDimensionalSSM(nn.Module):
                         curr = torch.fft.irfft2(x_f * k_f, s=(2 * fft_len, 2 * fft_len))[...,
                                s:two_dim_seq_len + s,
                                s:two_dim_seq_len + s]
+                        if idx == 1:
+                            curr = curr.flip(-2)
                         out += curr
             else:
                 k_f = torch.fft.rfft2(k.float(), s=(2 * fft_len, 2 * fft_len))
@@ -381,7 +388,7 @@ def run_steps_bidirectional(ssm2d, x, residual_and_silu=False):
     # x = x.permute(1, 2, 0)  # L, B ,D -> B, D, L
     x = x.view(l, l, B, D, 1)
     orig_x = x.clone().squeeze(-1) * ssm2d.omega
-    x_instances = [x.clone(), x.flip(0).clone(), x.flip(1).clone(), x.flip([0, 1]).clone()]
+    x_instances = [x.clone(), x.flip(0).clone()]  # , x.flip(1).clone(), x.flip([0, 1]).clone()]
     final_results = torch.zeros_like(x).squeeze(-1)
     for idx, instance in enumerate(x_instances):
         results = torch.zeros_like(x).squeeze(-1)
@@ -396,8 +403,11 @@ def run_steps_bidirectional(ssm2d, x, residual_and_silu=False):
                 y, state_h, state_v = ssm2d.one_step(instance[i, j], state_h_left, state_v_left, state_h_up, state_v_up,
                                                      bidirectional_index=idx)
                 results[i, j] = y
+                print('idx instance', idx, 'i j', i, j, 'y results', y.squeeze(0))
                 states_h[i, j] = state_h
                 states_v[i, j] = state_v
+        if idx == 1:
+            results = results.flip(0)
         final_results += results
 
     if residual_and_silu:
@@ -411,6 +421,7 @@ def test_ema():
     ndim = 1
     embed_dim = 1
     L = 2 ** 2
+    random_x = False
     bidirectional = True
     # truncation = None
     seed = 42
@@ -419,7 +430,10 @@ def test_ema():
 
     # X creation
     B = 1
-    x = torch.randn(L, B, embed_dim)
+    if random_x:
+        x = torch.randn(L, B, embed_dim)
+    else:
+        x = torch.arange(L, dtype=torch.float).view(L, 1, 1).repeat(1, B, embed_dim)
     conv_y = ssm2d(x)
     if bidirectional:
         results_step, states_step = run_steps_bidirectional(ssm2d, x, True)
