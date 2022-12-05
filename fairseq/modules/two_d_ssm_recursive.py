@@ -278,33 +278,29 @@ class TwoDimensionalSSM(nn.Module):
             # D x L
             fft_len = seq_len
             fft_len = int(math.sqrt(fft_len))
-            k = self.kernel(fft_len).permute(2, 0, 1) # H x L x L
+            k = self.kernel(fft_len).permute(2, 0, 1)  # H x L x L
             s = 0
             kernel_size = k.size(1)
             x = x.view(bsz, embed_dim, int(math.sqrt(seq_len)), int(math.sqrt(seq_len)))
             two_dim_seq_len = int(math.sqrt(seq_len))
+            out = None
             if self.bidirectional:
                 kernels = list(
                     torch.split(k, [self.embed_dim for i in range(4)], dim=0))  # 4 kernels, one for each direction.
-                kernels[0] = kernels[0]
-                kernels[1] = kernels[1].flip(-2)
-                # kernels[2] = kernels[2].flip(1)
-                # kernels[3] = kernels[3].flip([0, 1])
-                out = None
-                for idx, k in enumerate(kernels):
+                flip_dims = [[], [-2], [-1], [-2, -1]]
+                for idx, flip in enumerate(flip_dims):
+                    k = kernels[idx]
+                    curr_x = torch.flip(x, dims=flip)
+
                     k_f = torch.fft.rfft2(k.float(), s=(2 * fft_len, 2 * fft_len))
-                    x_f = torch.fft.rfft2(x.float(), s=(2 * fft_len, 2 * fft_len))
+                    x_f = torch.fft.rfft2(curr_x.float(), s=(2 * fft_len, 2 * fft_len))
+                    curr = torch.fft.irfft2(x_f * k_f, s=(2 * fft_len, 2 * fft_len))[..., s:two_dim_seq_len + s,
+                           s:two_dim_seq_len + s]
+                    curr_after_flip = torch.flip(curr, dims=flip)
                     if out is None:
-                        out = torch.fft.irfft2(x_f * k_f, s=(2 * fft_len, 2 * fft_len))[..., s:two_dim_seq_len + s,
-                              s:two_dim_seq_len + s]
-                        pass
+                        out = curr_after_flip
                     else:
-                        curr = torch.fft.irfft2(x_f * k_f, s=(2 * fft_len, 2 * fft_len))[...,
-                               s:two_dim_seq_len + s,
-                               s:two_dim_seq_len + s]
-                        if idx == 1:
-                            curr = curr.flip(-2)
-                        out += curr
+                        out += curr_after_flip
             else:
                 k_f = torch.fft.rfft2(k.float(), s=(2 * fft_len, 2 * fft_len))
                 x_f = torch.fft.rfft2(x.float(), s=(2 * fft_len, 2 * fft_len))
@@ -388,7 +384,8 @@ def run_steps_bidirectional(ssm2d, x, residual_and_silu=False):
     # x = x.permute(1, 2, 0)  # L, B ,D -> B, D, L
     x = x.view(l, l, B, D, 1)
     orig_x = x.clone().squeeze(-1) * ssm2d.omega
-    x_instances = [x.clone(), x.flip(0).clone()]  # , x.flip(1).clone(), x.flip([0, 1]).clone()]
+    flips = [[], [0], [1], [0, 1]]
+    x_instances = [torch.flip(x.clone(), dims=flip) for flip in flips]
     final_results = torch.zeros_like(x).squeeze(-1)
     for idx, instance in enumerate(x_instances):
         results = torch.zeros_like(x).squeeze(-1)
@@ -403,12 +400,11 @@ def run_steps_bidirectional(ssm2d, x, residual_and_silu=False):
                 y, state_h, state_v = ssm2d.one_step(instance[i, j], state_h_left, state_v_left, state_h_up, state_v_up,
                                                      bidirectional_index=idx)
                 results[i, j] = y
-                print('idx instance', idx, 'i j', i, j, 'y results', y.squeeze(0))
+                # print('idx instance', idx, 'i j', i, j, 'y results', y.squeeze(0))
                 states_h[i, j] = state_h
                 states_v[i, j] = state_v
-        if idx == 1:
-            results = results.flip(0)
-        final_results += results
+        final_results += torch.flip(results, dims=flips[idx])
+        # print('step results', results.squeeze(-1).squeeze(-1))
 
     if residual_and_silu:
         final_results += orig_x
@@ -419,8 +415,8 @@ def run_steps_bidirectional(ssm2d, x, residual_and_silu=False):
 
 def test_ema():
     ndim = 1
-    embed_dim = 1
-    L = 2 ** 2
+    embed_dim = 10
+    L = 32 ** 2
     random_x = False
     bidirectional = True
     # truncation = None
@@ -433,14 +429,16 @@ def test_ema():
     if random_x:
         x = torch.randn(L, B, embed_dim)
     else:
-        x = torch.arange(L, dtype=torch.float).view(L, 1, 1).repeat(1, B, embed_dim)
-    conv_y = ssm2d(x)
+        x = (torch.arange(L, dtype=torch.float) + 1).view(L, 1, 1).repeat(1, B, embed_dim)
     if bidirectional:
         results_step, states_step = run_steps_bidirectional(ssm2d, x, True)
     else:
         results_step, states_step = run_steps(ssm2d, x, True)
+
+    conv_y = ssm2d(x)
+
     results_step = results_step.view(L, B, embed_dim)
-    print('The mean difference is:', torch.norm(conv_y - results_step).mean())
+    print('The max difference is:', torch.norm(conv_y - results_step).max())
     print('The difference is:', (conv_y - results_step).squeeze(-1).squeeze(-1))
     assert torch.allclose(conv_y, results_step, atol=1e-4)
 
