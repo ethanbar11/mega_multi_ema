@@ -54,8 +54,8 @@ class TwoDimensionalSSM(nn.Module):
         self.one_side_length = int(math.sqrt(L))
         self.coeff_calc = CoeffCalculator(self.one_side_length)
         self.coeff_calc.calc_coeffs_lazy()
-        self.coeff_hor = self.coeff_calc.final_coeffs_matrix_horizontal
-        self.coeff_ver = self.coeff_calc.final_coeffs_matrix_vertical
+        self.coeff_hor = self.coeff_calc.final_coeffs_matrix_horizontal.cuda()
+        self.coeff_ver = self.coeff_calc.final_coeffs_matrix_vertical.cuda()
 
         # D x N x 1
         self.A1 = nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim))
@@ -143,7 +143,6 @@ class TwoDimensionalSSM(nn.Module):
         # L x L x H
         output_horizontal = einsum(x_h_matrix, self.C1 * self.scale, "l H N ,H N ->l H")
         output_vertical = einsum(x_v_matrix, self.C2 * self.scale, "l H N ,H N ->l H")
-        cell_2 = (self.C1 * self.scale) @ (A1 * B2 + A2 * B1).T
         # L x L x H
         output = output_horizontal + output_vertical
         output = output.view(length, length, self.kernel_dim)
