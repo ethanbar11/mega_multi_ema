@@ -54,8 +54,8 @@ class TwoDimensionalSSM(nn.Module):
         self.one_side_length = int(math.sqrt(L))
         self.coeff_calc = CoeffCalculator(self.one_side_length)
         self.coeff_calc.calc_coeffs_lazy()
-        self.coeff_hor = self.coeff_calc.final_coeffs_matrix_horizontal.cuda()
-        self.coeff_ver = self.coeff_calc.final_coeffs_matrix_vertical.cuda()
+        self.coeff_hor = self.coeff_calc.final_coeffs_matrix_horizontal
+        self.coeff_ver = self.coeff_calc.final_coeffs_matrix_vertical
 
         # D x N x 1
         self.A1 = nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim))
@@ -415,7 +415,7 @@ def run_steps_bidirectional(ssm2d, x, residual_and_silu=False):
 def test_ema():
     ndim = 1
     embed_dim = 10
-    L = 32 ** 2
+    L = 2 ** 2
     random_x = False
     bidirectional = True
     # truncation = None
@@ -424,7 +424,7 @@ def test_ema():
     ssm2d = TwoDimensionalSSM(embed_dim, ndim, bidirectional, L=L)
 
     # X creation
-    B = 1
+    B = 20
     if random_x:
         x = torch.randn(L, B, embed_dim)
     else:
