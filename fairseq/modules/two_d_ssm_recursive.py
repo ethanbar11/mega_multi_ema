@@ -59,8 +59,8 @@ class TwoDimensionalSSM(nn.Module):
         self.matrices = self.coeff_calc.matrices
         for key, inner_dic in self.matrices.items():
             for symbol, matrix in inner_dic.items():
-                self.matrices[key][symbol] = nn.Parameter(matrix).cuda()
-        self.matrices = nn.ParameterDict(self.matrices)
+                self.matrices[key][symbol] = matrix.cuda()
+        # self.matrices = nn.ParameterDict(self.matrices)
 
         # D x N x 1
         self.A = {
@@ -162,7 +162,7 @@ class TwoDimensionalSSM(nn.Module):
 
     def _compute_kernel(self, length: int):
         self._kernel = None
-        A,B_1,B_2 = self._calc_coeffs()
+        A, B_1, B_2 = self._calc_coeffs()
         # l x l x D x N
         outputs = self.compute_x_matrix(length)
         # L x L x D x N
