@@ -56,7 +56,7 @@ class CoeffCalculator:
 
         # Print files in current directory
         import os
-        self.cache_location = f'/home/ethan_baron/mega/coeffs_cache/matrices_{L}.pt'
+        self.cache_location = f'./coeffs_cache/matrices_{L}.pt'
 
     def calc_coeffs_lazy(self, force=False):
         checked_cache_location = self.cache_location.format(self.L)
