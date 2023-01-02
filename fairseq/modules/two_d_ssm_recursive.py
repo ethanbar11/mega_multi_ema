@@ -6,7 +6,7 @@
 
 import math
 from typing import Dict, Optional, Tuple
-from einops import rearrange, einsum
+from einops import rearrange, einsum, repeat
 import torch
 import numpy as np
 import torch.nn.functional as F
@@ -18,8 +18,8 @@ from fairseq.modules.ssm_coefficient import CoeffCalculator
 
 def plot_heatmap(x, title):
     import matplotlib.pyplot as plt
-    plt.imshow(x.cpu().detach().numpy(), cmap='hot', interpolation='nearest')
-    plt.title(title)
+    import seaborn as sns
+    sns.heatmap(x.cpu().detach().numpy()).set_title(title)
     plt.show()
 
 
@@ -38,6 +38,7 @@ class TwoDimensionalSSM(nn.Module):
             truncation=None,
             L=32 ** 2,
             force_coeff_calc=False,
+            n_ssm=2 ** 2
     ):
         super().__init__()
         print(L)
@@ -46,11 +47,13 @@ class TwoDimensionalSSM(nn.Module):
         self.embed_dim = embed_dim
         self.bidirectional = False
         self.ndim = ndim
+        self.n_ssm = n_ssm
+        self.repeat = self.embed_dim // self.n_ssm
 
         # TODO: Add support in ndim>1 bidirectionality, and truncation
         self.bidirectional = bidirectional
         self.scale = math.sqrt(1.0 / self.ndim)
-        self.kernel_dim = 4 * embed_dim if self.bidirectional else embed_dim
+        self.kernel_dim = 4 * self.n_ssm if self.bidirectional else self.n_ssm
 
         # TODO: Change this where we'll work with other benchmarks
         self.one_side_length = int(math.sqrt(L))
@@ -150,7 +153,7 @@ class TwoDimensionalSSM(nn.Module):
                     # TODO:  Maybe inserting bug here with the 1 replacement.
                     output[output == 0] = 1
                     output = output * current_calculation
-            output[output == 1] =0
+            output[output == 1] = 0
             outputs[direction] = output
         for direction, matrix in outputs.items():
             outputs[direction] = rearrange(matrix, '(r1 r2) h n -> r1 r2 h n',
@@ -172,6 +175,7 @@ class TwoDimensionalSSM(nn.Module):
         output_vertical = einsum(outputs['vertical'], self.C_2 * self.scale, "l H N ,H N ->l H")
         # L x L x H
         output = output_horizontal + output_vertical
+        # output = torch.softmax(output, dim=0)
         output = output.view(length, length, self.kernel_dim)
         output[0, :, :, ] *= 2
         output[:, 0, :, ] *= 2
@@ -321,8 +325,13 @@ class TwoDimensionalSSM(nn.Module):
             two_dim_seq_len = int(math.sqrt(seq_len))
             out = None
             if self.bidirectional:
+                # Split kernels to four directions
                 kernels = list(
-                    torch.split(k, [self.embed_dim for i in range(4)], dim=0))  # 4 kernels, one for each direction.
+                    torch.split(k, [self.n_ssm for i in range(4)], dim=0))  # 4 kernels, one for each direction.
+                # for i in range(k.shape[0]):
+                #     plot_heatmap(k[i], f'kernel {i}')
+                # Transform Kernels from L x L x n_ssm -> L x L x H
+                kernels = [repeat(k, ' n l1 l2 ->  (h n) l1 l2', h=self.repeat) for k in kernels]
                 flip_dims = [[], [-2], [-1], [-2, -1]]
                 for idx, flip in enumerate(flip_dims):
                     k = kernels[idx]
@@ -487,7 +496,7 @@ def test_kernel_to_sympy():
     device = 'cpu'
     ndim = 1
     embed_dim = 1
-    L = 32 ** 2
+    L = 3 ** 2
     L_one_sided = int(math.sqrt(L))
 
     random_x = False
@@ -495,7 +504,7 @@ def test_kernel_to_sympy():
     # truncation = None
     seed = 42
     torch.manual_seed(seed)
-    ssm2d = TwoDimensionalSSM(embed_dim, ndim, bidirectional, L=L, force_coeff_calc=True)
+    ssm2d = TwoDimensionalSSM(embed_dim, ndim, bidirectional, L=L, force_coeff_calc=True, n_ssm=1)
     ssm2d.to(device)
 
     # X creation
