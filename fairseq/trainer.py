@@ -22,7 +22,6 @@ from fairseq.logging import meters, metrics
 from fairseq.nan_detector import NanDetector
 from fairseq.optim import lr_scheduler
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -146,10 +145,10 @@ class Trainer(object):
     def criterion(self):
         if self._wrapped_criterion is None:
             if (
-                utils.has_parameters(self._criterion)
-                and self.data_parallel_world_size > 1
-                and not self.args.use_bmuf
-                and not self.tpu
+                    utils.has_parameters(self._criterion)
+                    and self.data_parallel_world_size > 1
+                    and not self.args.use_bmuf
+                    and not self.tpu
             ):
                 self._wrapped_criterion = models.DistributedFairseqModel(
                     self.args, self._criterion,
@@ -163,9 +162,9 @@ class Trainer(object):
     def model(self):
         if self._wrapped_model is None:
             if (
-                self.data_parallel_world_size > 1
-                and not self.args.use_bmuf
-                and not self.tpu
+                    self.data_parallel_world_size > 1
+                    and not self.args.use_bmuf
+                    and not self.tpu
             ):
                 self._wrapped_model = models.DistributedFairseqModel(
                     self.args, self._model,
@@ -188,12 +187,26 @@ class Trainer(object):
         return self._lr_scheduler
 
     def _build_optimizer(self):
-        params = list(
-            filter(
-                lambda p: p.requires_grad,
-                chain(self.model.parameters(), self.criterion.parameters()),
-            )
-        )
+        """Build the optimizer and lr_scheduler."""
+        # Building params dict
+        only_mega_params = {'params': [], 'weight_decay': 0}
+        other_params = {'params': list(self.criterion.parameters())}
+
+        for name, W in self.model.named_parameters():
+            if W.requires_grad:
+                if '.move.' not in name:
+                    other_params['params'].append(W)
+                elif 'omega' in name:
+                    other_params['params'].append(W)
+                else:
+                    only_mega_params['params'].append(W)
+        params = [only_mega_params, other_params]
+        # params = list(
+        #     filter(
+        #         lambda p: p.requires_grad,
+        #         chain(self.model.parameters(), self.criterion.parameters()),
+        #     )
+        # )
 
         if self.args.fp16 or self.args.bf16:
             if self.cuda and torch.cuda.get_device_capability(0)[0] < 7:
@@ -238,12 +251,12 @@ class Trainer(object):
             )
 
     def load_checkpoint(
-        self,
-        filename,
-        reset_optimizer=False,
-        reset_lr_scheduler=False,
-        optimizer_overrides=None,
-        reset_meters=False,
+            self,
+            filename,
+            reset_optimizer=False,
+            reset_lr_scheduler=False,
+            optimizer_overrides=None,
+            reset_meters=False,
     ):
         """Load all training state from a checkpoint file."""
         extra_state, self._optim_history, last_optim_state = None, [], None
@@ -278,10 +291,10 @@ class Trainer(object):
             # only reload optimizer and lr_scheduler if they match
             last_optim = self._optim_history[-1]
             assert (
-                last_optim["criterion_name"] == self.get_criterion().__class__.__name__
+                    last_optim["criterion_name"] == self.get_criterion().__class__.__name__
             ), "Criterion does not match; please reset the optimizer (--reset-optimizer)."
             assert (
-                last_optim["optimizer_name"] == self.optimizer.__class__.__name__
+                    last_optim["optimizer_name"] == self.optimizer.__class__.__name__
             ), "Optimizer does not match; please reset the optimizer (--reset-optimizer)."
 
             if not reset_lr_scheduler:
@@ -317,12 +330,12 @@ class Trainer(object):
         return extra_state
 
     def get_train_iterator(
-        self,
-        epoch,
-        combine=True,
-        load_dataset=True,
-        data_selector=None,
-        shard_batch_itr=True,
+            self,
+            epoch,
+            combine=True,
+            load_dataset=True,
+            data_selector=None,
+            shard_batch_itr=True,
     ):
         """Return an EpochBatchIterator over the training set for a given epoch."""
         if load_dataset:
@@ -352,8 +365,8 @@ class Trainer(object):
         )
 
     def get_valid_iterator(
-        self,
-        subset,
+            self,
+            subset,
     ):
         """Return an EpochBatchIterator over given validation subset for a given epoch."""
         if hasattr(self.task, 'is_mega_lm') and self.task.is_mega_lm:
@@ -438,9 +451,9 @@ class Trainer(object):
                 all-reduce in the last backwards pass.
                 """
                 if (
-                    self.data_parallel_world_size > 1
-                    and hasattr(self.model, "no_sync")
-                    and i < len(samples) - 1
+                        self.data_parallel_world_size > 1
+                        and hasattr(self.model, "no_sync")
+                        and i < len(samples) - 1
                 ):
                     return self.model.no_sync()
                 else:
@@ -537,9 +550,9 @@ class Trainer(object):
 
             # check that grad norms are consistent across workers
             if (
-                not self.args.use_bmuf
-                and self.args.distributed_wrapper != 'SlowMo'
-                and not self.tpu
+                    not self.args.use_bmuf
+                    and self.args.distributed_wrapper != 'SlowMo'
+                    and not self.tpu
             ):
                 self._check_grad_norms(grad_norm)
 
@@ -601,12 +614,12 @@ class Trainer(object):
 
                 # clear CUDA cache to reduce memory fragmentation
                 if (
-                    self.cuda
-                    and self.args.empty_cache_freq > 0
-                    and (
+                        self.cuda
+                        and self.args.empty_cache_freq > 0
+                        and (
                         (self.get_num_updates() + self.args.empty_cache_freq - 1)
                         % self.args.empty_cache_freq
-                    ) == 0
+                ) == 0
                 ):
                     torch.cuda.empty_cache()
 
@@ -666,7 +679,7 @@ class Trainer(object):
 
         # gather logging outputs from all replicas
         if self.data_parallel_world_size > 1:
-            logging_outputs, (sample_size, ) = self._aggregate_logging_outputs(
+            logging_outputs, (sample_size,) = self._aggregate_logging_outputs(
                 logging_outputs, sample_size, ignore=is_dummy_batch,
             )
 
@@ -687,15 +700,15 @@ class Trainer(object):
                 chunk_size = self.args.decoder_chunk_size * dummy_bsz
                 pad = self.task.dictionary.pad()
                 self._dummy_valid_batch = {
-                        'id': dummy_train['id'].new(dummy_bsz).fill_(1),
-                        'nsentences': dummy_bsz,
-                        'ntokens': chunk_size * dummy_bsz,
-                        'net_input': {
-                            'src_tokens': dummy_train['net_input']['src_tokens'].new(dummy_bsz, chunk_size).fill_(pad),
-                            'src_lengths': dummy_train['net_input']['src_lengths'].new(dummy_bsz).fill_(chunk_size),
-                        },
-                        'target': dummy_train['target'].new(dummy_bsz, chunk_size).fill_(pad),
-                    }
+                    'id': dummy_train['id'].new(dummy_bsz).fill_(1),
+                    'nsentences': dummy_bsz,
+                    'ntokens': chunk_size * dummy_bsz,
+                    'net_input': {
+                        'src_tokens': dummy_train['net_input']['src_tokens'].new(dummy_bsz, chunk_size).fill_(pad),
+                        'src_lengths': dummy_train['net_input']['src_lengths'].new(dummy_bsz).fill_(chunk_size),
+                    },
+                    'target': dummy_train['target'].new(dummy_bsz, chunk_size).fill_(pad),
+                }
         if self.tpu:
             import torch_xla.core.xla_model as xm
             xm.rendezvous('valid_step')  # wait for all workers
@@ -899,8 +912,8 @@ class Trainer(object):
             return False
         elif self.args.use_bmuf:
             return (
-                (self.get_num_updates() + 1) % self.args.global_sync_iter == 0
-                and (self.get_num_updates() + 1) > self.args.warmup_iterations
+                    (self.get_num_updates() + 1) % self.args.global_sync_iter == 0
+                    and (self.get_num_updates() + 1) > self.args.warmup_iterations
             )
         else:
             return True
@@ -914,10 +927,10 @@ class Trainer(object):
         sys.stderr.flush()
 
     def _aggregate_logging_outputs(
-        self,
-        logging_outputs: List[Dict[str, Any]],
-        *extra_stats_to_sum,
-        ignore=False,
+            self,
+            logging_outputs: List[Dict[str, Any]],
+            *extra_stats_to_sum,
+            ignore=False,
     ):
         if self.task.__class__.logging_outputs_can_be_summed(self.get_criterion()):
             return self._fast_stat_sync_sum(
@@ -929,10 +942,10 @@ class Trainer(object):
             )
 
     def _all_gather_list_sync(
-        self,
-        logging_outputs: List[Dict[str, Any]],
-        *extra_stats_to_sum,
-        ignore=False,
+            self,
+            logging_outputs: List[Dict[str, Any]],
+            *extra_stats_to_sum,
+            ignore=False,
     ):
         """
         Sync logging outputs across workers. all_gather_list_sync is
@@ -955,10 +968,10 @@ class Trainer(object):
         return logging_outputs, extra_stats_to_sum
 
     def _fast_stat_sync_sum(
-        self,
-        logging_outputs: List[Dict[str, Any]],
-        *extra_stats_to_sum,
-        ignore=False,
+            self,
+            logging_outputs: List[Dict[str, Any]],
+            *extra_stats_to_sum,
+            ignore=False,
     ):
         """
         Sync logging outputs across workers. fast_stat_sync_sum is
@@ -1009,8 +1022,8 @@ class Trainer(object):
             def is_consistent(tensor):
                 max_abs_diff = torch.max(torch.abs(tensor - tensor[0]))
                 return (
-                    not torch.isfinite(tensor).any()
-                    or (max_abs_diff / (tensor[0] + 1e-6) < 1e-6).all()
+                        not torch.isfinite(tensor).any()
+                        or (max_abs_diff / (tensor[0] + 1e-6) < 1e-6).all()
                 )
 
             if not is_consistent(self._grad_norm_buf):
