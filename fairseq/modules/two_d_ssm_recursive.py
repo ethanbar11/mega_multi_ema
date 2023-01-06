@@ -38,7 +38,8 @@ class TwoDimensionalSSM(nn.Module):
             truncation=None,
             L=32 ** 2,
             force_coeff_calc=False,
-            n_ssm=2 ** 2
+            n_ssm=2 ** 2,
+            use_static_kernel=True
     ):
         super().__init__()
         print(L)
@@ -64,7 +65,8 @@ class TwoDimensionalSSM(nn.Module):
             for symbol, matrix in inner_dic.items():
                 self.matrices[key][symbol] = matrix.cuda()
         # self.matrices = nn.ParameterDict(self.matrices)
-
+        self.use_static_kernel = use_static_kernel
+        self.last_kernel = None
         # D x N x 1
         self.A = {
             'A_1': nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim)),
@@ -165,6 +167,8 @@ class TwoDimensionalSSM(nn.Module):
 
     def _compute_kernel(self, length: int):
         self._kernel = None
+        if self.use_static_kernel and self.last_kernel is not None:
+            return self.last_kernel
         A, B_1, B_2 = self._calc_coeffs()
         # l x l x D x N
         outputs = self.compute_x_matrix(length)
@@ -180,6 +184,8 @@ class TwoDimensionalSSM(nn.Module):
         output[0, :, :, ] *= 2
         output[:, 0, :, ] *= 2
         output[0, 0] /= 4
+        if self.last_kernel is not None:
+            self.last_kernel = output
 
         return output
 
