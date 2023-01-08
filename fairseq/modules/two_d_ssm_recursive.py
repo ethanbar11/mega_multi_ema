@@ -38,8 +38,8 @@ class TwoDimensionalSSM(nn.Module):
             truncation=None,
             L=32 ** 2,
             force_coeff_calc=False,
-            n_ssm=2 ** 2,
-            use_static_kernel=True
+            n_ssm=2 ** 3,
+            use_static_kernel=False
     ):
         super().__init__()
         print(L)
@@ -49,6 +49,7 @@ class TwoDimensionalSSM(nn.Module):
         self.bidirectional = False
         self.ndim = ndim
         self.n_ssm = n_ssm
+        self.min_value = 1e-5
         self.repeat = self.embed_dim // self.n_ssm
 
         # TODO: Add support in ndim>1 bidirectionality, and truncation
@@ -136,11 +137,18 @@ class TwoDimensionalSSM(nn.Module):
                 einsum(torch.arange(power_dim).to(tensor.device),
                        torch.log(tensor),
                        'l , h n -> l h n'))
+            mask = A_powers[symbol] < self.min_value
+            A_powers[symbol][mask] = 0
+
         B = torch.stack([B1, B2], dim=0)
+
+        mask = B < self.min_value
+        B[mask] = 0
         outputs = {}
         for direction in self.matrices.keys():
             # Should be sized R x H x N
             outputs[direction] = None
+        non_zero_mask = None
         for direction, matrices in self.matrices.items():
             output = outputs[direction]
             for symbol, matrix in matrices.items():
@@ -150,11 +158,14 @@ class TwoDimensionalSSM(nn.Module):
                 # with ones so the multiplication will be valid
                 if output is None:
                     output = current_calculation
+                    non_zero_mask = output != 0
                 else:
-                    current_calculation[current_calculation == 0] = 1
-                    # TODO:  Maybe inserting bug here with the 1 replacement.
-                    output[output == 0] = 1
+                    current_non_zero_mask = current_calculation != 0
+                    intersection_mask = non_zero_mask & current_non_zero_mask
+                    current_calculation[current_non_zero_mask & ~intersection_mask] = 1
+                    output[non_zero_mask & ~intersection_mask] = 1
                     output = output * current_calculation
+                    non_zero_mask = output != 0
             output[output == 1] = 0
             outputs[direction] = output
         for direction, matrix in outputs.items():
@@ -184,7 +195,7 @@ class TwoDimensionalSSM(nn.Module):
         output[0, :, :, ] *= 2
         output[:, 0, :, ] *= 2
         output[0, 0] /= 4
-        if self.last_kernel is not None:
+        if self.last_kernel is None:
             self.last_kernel = output
 
         return output
@@ -334,8 +345,8 @@ class TwoDimensionalSSM(nn.Module):
                 # Split kernels to four directions
                 kernels = list(
                     torch.split(k, [self.n_ssm for i in range(4)], dim=0))  # 4 kernels, one for each direction.
-                # for i in range(k.shape[0]):
-                #     plot_heatmap(k[i], f'kernel {i}')
+                for i in range(k.shape[0]):
+                    plot_heatmap(torch.abs(k[i]), f'kernel {i}')
                 # Transform Kernels from L x L x n_ssm -> L x L x H
                 kernels = [repeat(k, ' n l1 l2 ->  (h n) l1 l2', h=self.repeat) for k in kernels]
                 flip_dims = [[], [-2], [-1], [-2, -1]]
