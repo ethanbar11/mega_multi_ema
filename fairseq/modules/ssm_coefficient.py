@@ -100,6 +100,7 @@ class CoeffCalculator:
         vec = torch.zeros(self.coeff_vec_size, self.coeff_vec_size)
         i = 0
         for key, val in coeff_dict.items():
+            found = False
             for arg in key.args:
                 if len(arg.args) == 0:
                     s = str(arg)
@@ -109,6 +110,9 @@ class CoeffCalculator:
                     pow = int(arg.args[1])
                 if s == symbol:
                     vec[i, pow] = 1
+                    found = True
+            if not found:
+                vec[i, 0] = 1
             i += 1
         return vec
 
@@ -187,5 +191,5 @@ if __name__ == '__main__':
     fake_B_2 = 1
     fake_C_1 = 1
     fake_C_2 = 1
-    kernel = calc.compute_kernel(fake_A, fake_B_1, fake_B_2, fake_C_1, fake_C_2)
+    kernel = calc.compute_sympy_kernel(fake_A, fake_B_1, fake_B_2, fake_C_1, fake_C_2)
     print(kernel)

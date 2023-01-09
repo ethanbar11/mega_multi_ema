@@ -38,7 +38,7 @@ class TwoDimensionalSSM(nn.Module):
             truncation=None,
             L=32 ** 2,
             force_coeff_calc=False,
-            n_ssm=2 ** 2,
+            n_ssm=2 ** 1 ,
             use_static_kernel=True
     ):
         super().__init__()
@@ -64,7 +64,6 @@ class TwoDimensionalSSM(nn.Module):
         for key, inner_dic in self.matrices.items():
             for symbol, matrix in inner_dic.items():
                 self.matrices[key][symbol] = matrix.cuda()
-        # self.matrices = nn.ParameterDict(self.matrices)
         self.use_static_kernel = use_static_kernel
         self.last_kernel = None
         # D x N x 1
@@ -86,6 +85,7 @@ class TwoDimensionalSSM(nn.Module):
 
         self.horizontal_flow = None
         self.vertical_flow = None
+        self.counter = 0
 
         self._kernel = None
         self._coeffs = None
@@ -146,16 +146,11 @@ class TwoDimensionalSSM(nn.Module):
             for symbol, matrix in matrices.items():
                 vec = B if symbol == 'B' else A_powers[symbol]
                 current_calculation = einsum(matrix, vec, 'R V, V h n -> R h n')
-                # Replaces all the zeros in  current_calculation
-                # with ones so the multiplication will be valid
+
                 if output is None:
                     output = current_calculation
                 else:
-                    current_calculation[current_calculation == 0] = 1
-                    # TODO:  Maybe inserting bug here with the 1 replacement.
-                    output[output == 0] = 1
                     output = output * current_calculation
-            output[output == 1] = 0
             outputs[direction] = output
         for direction, matrix in outputs.items():
             outputs[direction] = rearrange(matrix, '(r1 r2) h n -> r1 r2 h n',
@@ -361,7 +356,7 @@ class TwoDimensionalSSM(nn.Module):
             out = rearrange(out, 'b d l1 l2 -> b d (l1 l2)')
             # B x D x L -> L x B x D
             out = F.silu(out.permute(2, 0, 1) + residual)
-
+        self.counter = 0
         return out
 
     def _get_input_buffer(self, incremental_state: Optional[Dict[str, Dict[str, Optional[Tensor]]]]) -> Dict[
@@ -502,7 +497,7 @@ def test_kernel_to_sympy():
     device = 'cpu'
     ndim = 1
     embed_dim = 1
-    L = 3 ** 2
+    L = 25 ** 2
     L_one_sided = int(math.sqrt(L))
 
     random_x = False
@@ -511,18 +506,26 @@ def test_kernel_to_sympy():
     seed = 42
     torch.manual_seed(seed)
     ssm2d = TwoDimensionalSSM(embed_dim, ndim, bidirectional, L=L, force_coeff_calc=True, n_ssm=1)
+    ssm2d.A['A_1'].data = torch.tensor([[-1.5082]])
+    ssm2d.A['A_2'].data = torch.tensor([[-13.3610]])
+    ssm2d.A['A_3'].data = torch.tensor([[14.4289]])
+    ssm2d.A['A_4'].data = torch.tensor([[-5.8776]])
+    ssm2d.B_1.data = torch.tensor([[-3.7783]])
+    ssm2d.B_2.data = torch.tensor([[-16.5449]])
+    ssm2d.C_1.data = torch.tensor([[2.4708]])
+    ssm2d.C_2.data = torch.tensor([[-2.0847]])
     ssm2d.to(device)
 
     # X creation
-    B = 1
+    BATCH_SIZE = 1
     if random_x:
-        x = torch.randn(L, B, embed_dim).to(device)
+        x = torch.randn(L, BATCH_SIZE, embed_dim).to(device)
     else:
-        x = (torch.arange(L, dtype=torch.float) + 1).view(L, 1, 1).repeat(1, B, embed_dim).to(device)
+        x = (torch.arange(L, dtype=torch.float) + 1).view(L, 1, 1).repeat(1, BATCH_SIZE, embed_dim).to(device)
     sympy_kernel = ssm2d.compute_sympy_kernel()
     kernel = ssm2d._compute_kernel(L_one_sided).squeeze(-1)
     sympy_kernel = torch.from_numpy(sympy_kernel.values.astype(np.float32)).to(device)
-    print(kernel - sympy_kernel)
+    print(kernel)
     assert torch.allclose(kernel, sympy_kernel, atol=1e-4)
 
 
