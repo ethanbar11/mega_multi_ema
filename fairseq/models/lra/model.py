@@ -314,7 +314,8 @@ class LRAEncoder(FairseqEncoder):
                 truncation=getattr(args, 'truncation_length', None),
                 rel_pos_bias=args.rel_pos_bias,
                 max_seq_len=args.max_positions,
-                sen_rep_type=getattr(args, 'sen_rep_type', 'mp')
+                sen_rep_type=getattr(args, 'sen_rep_type', 'mp'),
+                args = args
             )
         else:
             self.encoder = LunaLRAEncoder(

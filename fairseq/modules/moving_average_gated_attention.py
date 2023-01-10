@@ -48,6 +48,7 @@ class MovingAverageGatedAttention(nn.Module):
             rel_pos_bias='simple',
             max_positions=1024,
             export=False,
+            args = None
     ):
         super().__init__()
 
@@ -70,7 +71,7 @@ class MovingAverageGatedAttention(nn.Module):
         self.norm = SequenceNorm(norm_type, embed_dim, affine=norm_affine, export=export)
 
         # Changed to 2ssm
-        self.move = TwoDimensionalSSM(embed_dim, ndim=ndim, bidirectional=bidirectional, truncation=truncation)
+        self.move = TwoDimensionalSSM(embed_dim, ndim=ndim, bidirectional=bidirectional, truncation=truncation,args = args)
 
         self.v_proj = nn.Linear(embed_dim, hdim)
         self.mx_proj = nn.Linear(embed_dim, zdim + hdim + 2 * embed_dim)

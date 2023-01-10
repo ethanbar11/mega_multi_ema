@@ -23,6 +23,7 @@ def get_training_parser(default_task="translation"):
     parser = get_parser("Trainer", default_task)
     add_dataset_args(parser, train=True)
     add_distributed_training_args(parser)
+    add_two_d_ssm_args(parser)
     add_model_args(parser)
     add_optimization_args(parser)
     add_checkpoint_args(parser)
@@ -93,11 +94,11 @@ def eval_bool(x, default=False):
 
 
 def parse_args_and_arch(
-    parser: argparse.ArgumentParser,
-    input_args: List[str] = None,
-    parse_known: bool = False,
-    suppress_defaults: bool = False,
-    modify_parser: Optional[Callable[[argparse.ArgumentParser], None]] = None,
+        parser: argparse.ArgumentParser,
+        input_args: List[str] = None,
+        parse_known: bool = False,
+        suppress_defaults: bool = False,
+        modify_parser: Optional[Callable[[argparse.ArgumentParser], None]] = None,
 ):
     """
     Args:
@@ -339,6 +340,11 @@ def add_preprocess_args(parser):
     return parser
 
 
+def add_two_d_ssm_args(parser):
+    group = parser.add_argument_group("Two Dimensional SSM Group")
+    group.add_argument('--n_ssm', type=int, default=1, help='number of internal ssms')
+
+
 def add_dataset_args(parser, train=False, gen=False):
     group = parser.add_argument_group("Dataset and data loading")
     # fmt: off
@@ -357,7 +363,7 @@ def add_dataset_args(parser, train=False, gen=False):
                         choices=get_available_dataset_impl(),
                         help='output dataset implementation')
     group.add_argument('--data-buffer-size', default=10, type=int, metavar='N',
-                        help='number of batches to preload')
+                       help='number of batches to preload')
     if train:
         group.add_argument('--train-subset', default='train', metavar='SPLIT',
                            help='data subset to use for training (e.g. train, valid, test)')
@@ -433,12 +439,12 @@ def add_distributed_training_args(parser, default_world_size=None):
                             're-reading the data')
     group.add_argument('--find-unused-parameters', default=False, action='store_true',
                        help='disable unused parameter detection (not applicable to '
-                       'no_c10d ddp-backend')
+                            'no_c10d ddp-backend')
     group.add_argument('--fast-stat-sync', default=False, action='store_true',
                        help='[deprecated] this is now defined per Criterion')
     group.add_argument('--broadcast-buffers', default=False, action='store_true',
                        help='Copy non-trainable parameters between GPUs, such as '
-                      'batchnorm population statistics')
+                            'batchnorm population statistics')
 
     group.add_argument('--distributed-wrapper', default='DDP', type=str,
                        choices=['DDP', 'SlowMo'],

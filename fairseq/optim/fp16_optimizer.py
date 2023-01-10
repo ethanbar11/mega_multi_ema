@@ -26,12 +26,15 @@ class _FP16OptimizerMixin(object):
     def build_fp32_params(cls, params, flatten=True):
         # create FP32 copy of parameters and grads
         if flatten:
-            total_param_size = sum(p.data.numel() for p in params)
-            fp32_params = torch.zeros(total_param_size, dtype=torch.float, device=params[0].device)
+            params_as_lst = []
+            for param_group in params:
+                params_as_lst.extend(param_group['params'])
+            total_param_size = sum(p.data.numel() for p in params_as_lst)
+            fp32_params = torch.zeros(total_param_size, dtype=torch.float, device=params_as_lst[0].device)
             offset = 0
-            for p in params:
+            for p in params_as_lst:
                 numel = p.data.numel()
-                fp32_params[offset:offset+numel].copy_(p.data.view(-1))
+                fp32_params[offset:offset + numel].copy_(p.data.view(-1))
                 offset += numel
             fp32_params = torch.nn.Parameter(fp32_params)
             fp32_params.grad = fp32_params.data.new(total_param_size)
@@ -84,12 +87,15 @@ class _FP16OptimizerMixin(object):
             # copy FP16 grads to FP32
             if self.has_flat_params:
                 offset = 0
-                for p in self.fp16_params:
+                params_as_lst = []
+                for param_group in self.fp16_params:
+                    params_as_lst.extend(param_group['params'])
+                for p in params_as_lst:
                     if not p.requires_grad:
                         continue
                     grad_data = p.grad.data if p.grad is not None else p.data.new_zeros(p.data.shape)
                     numel = grad_data.numel()
-                    self.fp32_params.grad.data[offset:offset+numel].copy_(grad_data.view(-1))
+                    self.fp32_params.grad.data[offset:offset + numel].copy_(grad_data.view(-1))
                     offset += numel
                 self.fp32_params.grad.data.mul_(multiply_grads)
             else:
@@ -108,11 +114,17 @@ class _FP16OptimizerMixin(object):
         # copy FP32 params back into FP16 model
         if self.has_flat_params:
             offset = 0
-            for p in self.fp16_params:
+
+            params_as_lst = []
+            for param_group in self.fp16_params:
+
+                params_as_lst.extend(param_group['params'])
+
+            for p in params_as_lst:
                 if not p.requires_grad:
                     continue
                 numel = p.data.numel()
-                p.data.copy_(self.fp32_params.data[offset:offset+numel].view_as(p.data))
+                p.data.copy_(self.fp32_params.data[offset:offset + numel].view_as(p.data))
                 offset += numel
         else:
             for p, p32 in zip(self.fp16_params, self.fp32_params):
@@ -153,7 +165,10 @@ class _FP16OptimizerMixin(object):
 
     def zero_grad(self):
         """Clears the gradients of all optimized parameters."""
-        for p in self.fp16_params:
+        params_as_lst = []
+        for param_group in self.fp16_params:
+            params_as_lst.extend(param_group['params'])
+        for p in params_as_lst:
             p.grad = None
         if self.has_flat_params:
             self.fp32_params.grad.zero_()
@@ -181,7 +196,7 @@ class FP16Optimizer(_FP16OptimizerMixin, optim.FairseqOptimizer):
                     'custom --update-freq schedule'
                 )
             data_parallel_size = int(args.distributed_world_size / args.model_parallel_size)
-            scale_window = int(2**14 / data_parallel_size / args.update_freq[0])
+            scale_window = int(2 ** 14 / data_parallel_size / args.update_freq[0])
         else:
             scale_window = args.fp16_scale_window
 
@@ -373,7 +388,7 @@ class MemoryEfficientFP16Optimizer(_MemoryEfficientFP16OptimizerMixin, optim.Fai
                     'custom --update-freq schedule'
                 )
             data_parallel_size = int(args.distributed_world_size / args.model_parallel_size)
-            scale_window = 2**14 / data_parallel_size / args.update_freq[0]
+            scale_window = 2 ** 14 / data_parallel_size / args.update_freq[0]
         else:
             scale_window = args.fp16_scale_window
 

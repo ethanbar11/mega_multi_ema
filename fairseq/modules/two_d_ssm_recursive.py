@@ -25,11 +25,6 @@ def plot_heatmap(x, title):
 
 @with_incremental_state
 class TwoDimensionalSSM(nn.Module):
-    """Exponential Moving Average Layer.
-
-    See "https://arxiv.org/abs/2209.10655" for more details.
-    """
-
     def __init__(
             self,
             embed_dim,
@@ -38,8 +33,8 @@ class TwoDimensionalSSM(nn.Module):
             truncation=None,
             L=32 ** 2,
             force_coeff_calc=False,
-            n_ssm=2 ** 1 ,
-            use_static_kernel=True
+            use_static_kernel=True,
+            args=None,
     ):
         super().__init__()
         print(L)
@@ -48,7 +43,7 @@ class TwoDimensionalSSM(nn.Module):
         self.embed_dim = embed_dim
         self.bidirectional = False
         self.ndim = ndim
-        self.n_ssm = n_ssm
+        self.n_ssm = args.n_ssm
         self.repeat = self.embed_dim // self.n_ssm
 
         # TODO: Add support in ndim>1 bidirectionality, and truncation
@@ -63,7 +58,10 @@ class TwoDimensionalSSM(nn.Module):
         self.matrices = self.coeff_calc.matrices
         for key, inner_dic in self.matrices.items():
             for symbol, matrix in inner_dic.items():
+                if args.fp16:
+                    matrix = matrix.half()
                 self.matrices[key][symbol] = matrix.cuda()
+
         self.use_static_kernel = use_static_kernel
         self.last_kernel = None
         # D x N x 1

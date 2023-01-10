@@ -12,6 +12,4 @@ from fairseq_cli.train import cli_main
 
 
 if __name__ == '__main__':
-    import os
-    os.environ["CUDA_VISIBLE_DEVICES"] = "0"
     cli_main()

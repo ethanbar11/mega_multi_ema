@@ -119,6 +119,7 @@ class MegaDecoderLayer(nn.Module):
             norm_type=args.normalization_type,
             prenorm=args.normalize_before,
             feature_dropout=args.feature_dropout,
+            args=args
         )
 
     def build_cross_attn(self, embed_dim, args):
@@ -154,14 +155,14 @@ class MegaDecoderLayer(nn.Module):
         self.onnx_trace = True
 
     def forward(
-        self,
-        x,
-        encoder_out: Optional[torch.Tensor] = None,
-        encoder_padding_mask: Optional[torch.Tensor] = None,
-        incremental_state: Optional[Dict[str, Dict[str, Optional[Tensor]]]] = None,
-        attn_mask: Optional[torch.Tensor] = None,
-        decoder_padding_mask: Optional[torch.Tensor] = None,
-        need_attn: bool = False,
+            self,
+            x,
+            encoder_out: Optional[torch.Tensor] = None,
+            encoder_padding_mask: Optional[torch.Tensor] = None,
+            incremental_state: Optional[Dict[str, Dict[str, Optional[Tensor]]]] = None,
+            attn_mask: Optional[torch.Tensor] = None,
+            decoder_padding_mask: Optional[torch.Tensor] = None,
+            need_attn: bool = False,
     ):
         """
         Args:
