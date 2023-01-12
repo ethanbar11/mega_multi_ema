@@ -4,6 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+
 import math
 from typing import Dict, Optional, Tuple
 from einops import rearrange, einsum, repeat
@@ -14,6 +15,9 @@ from torch import Tensor, nn
 
 from fairseq.incremental_decoding_utils import with_incremental_state
 from fairseq.modules.ssm_coefficient import CoeffCalculator
+
+_c2r = torch.view_as_real
+_r2c = torch.view_as_complex
 
 
 def plot_heatmap(x, title):
@@ -44,12 +48,14 @@ class TwoDimensionalSSM(nn.Module):
         self.bidirectional = False
         self.ndim = ndim
         self.n_ssm = args.n_ssm
+        self.is_complex = args.complex_ssm
+        self.directions_amount = args.directions_amount
         self.repeat = self.embed_dim // self.n_ssm
 
         # TODO: Add support in ndim>1 bidirectionality, and truncation
         self.bidirectional = bidirectional
         self.scale = math.sqrt(1.0 / self.ndim)
-        self.kernel_dim = 4 * self.n_ssm if self.bidirectional else self.n_ssm
+        self.kernel_dim = args.directions_amount * self.n_ssm
 
         # TODO: Change this where we'll work with other benchmarks
         self.one_side_length = int(math.sqrt(L))
@@ -60,24 +66,26 @@ class TwoDimensionalSSM(nn.Module):
             for symbol, matrix in inner_dic.items():
                 if args.fp16:
                     matrix = matrix.half()
+                if self.is_complex:
+                    matrix = matrix.type(torch.complex64)
                 self.matrices[key][symbol] = matrix.cuda()
 
         self.use_static_kernel = use_static_kernel
         self.last_kernel = None
-        # D x N x 1
+        last_dim = 2 if self.is_complex else 1
+        # H x N
         self.A = {
-            'A_1': nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim)),
-            'A_2': nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim)),
-            'A_3': nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim)),
-            'A_4': nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim)),
+            'A_1': nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim, last_dim)),
+            'A_2': nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim, last_dim)),
+            'A_3': nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim, last_dim)),
+            'A_4': nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim, last_dim)),
         }
         self.A = nn.ParameterDict(self.A)
-        self.B_1 = nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim))
-        self.B_2 = nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim))
+        self.B_1 = nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim, last_dim))
+        self.B_2 = nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim, last_dim))
         # D x N
-        self.C_1 = nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim))
-        self.C_2 = nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim))
-
+        self.C_1 = nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim, last_dim))
+        self.C_2 = nn.Parameter(torch.Tensor(self.kernel_dim, self.ndim, last_dim))
         # sized D because this is a residual connection (element-wise)
         self.omega = nn.Parameter(torch.Tensor(embed_dim))
 
@@ -119,8 +127,18 @@ class TwoDimensionalSSM(nn.Module):
         A = {}
         for symbol, tensor in self.A.items():
             A[symbol] = torch.sigmoid(tensor)
+            if self.is_complex:
+                A[symbol] = _r2c(A[symbol])
+            else:
+                A[symbol] = A[symbol].squeeze(-1)
         B1 = torch.sigmoid(self.B_1)
         B2 = torch.sigmoid(self.B_2)
+        if self.is_complex:
+            B1 = _r2c(B1)
+            B2 = _r2c(B2)
+        else:
+            B1 = B1.squeeze(-1)
+            B2 = B2.squeeze(-1)
         return A, B1, B2
 
     def compute_x_matrix(self, kernel_dim):
@@ -133,7 +151,7 @@ class TwoDimensionalSSM(nn.Module):
             A_powers[symbol] = torch.exp(
                 einsum(torch.arange(power_dim).to(tensor.device),
                        torch.log(tensor),
-                       'l , h n -> l h n'))
+                       'l , h n-> l h n'))
         B = torch.stack([B1, B2], dim=0)
         outputs = {}
         for direction in self.matrices.keys():
@@ -151,7 +169,7 @@ class TwoDimensionalSSM(nn.Module):
                     output = output * current_calculation
             outputs[direction] = output
         for direction, matrix in outputs.items():
-            outputs[direction] = rearrange(matrix, '(r1 r2) h n -> r1 r2 h n',
+            outputs[direction] = rearrange(matrix, '(r1 r2) h n-> r1 r2 h n',
                                            r1=self.one_side_length ** 2,
                                            r2=self.coeff_calc.coeff_rows_amount // (self.one_side_length ** 2))
             # Sum over the second dimension
@@ -168,15 +186,24 @@ class TwoDimensionalSSM(nn.Module):
         # L x L x D x N
 
         # L x L x H
-        output_horizontal = einsum(outputs['horizontal'], self.C_1 * self.scale, "l H N ,H N ->l H")
-        output_vertical = einsum(outputs['vertical'], self.C_2 * self.scale, "l H N ,H N ->l H")
+        if self.is_complex:
+            C_1 = _r2c(self.C_1)
+            C_2 = _r2c(self.C_2)
+        else:
+            C_1 = self.C_1.squeeze(-1)
+            C_2 = self.C_2.squeeze(-1)
+        output_horizontal = einsum(outputs['horizontal'], C_1 * self.scale, "l H N ,H N->l H")
+        output_vertical = einsum(outputs['vertical'], C_2 * self.scale, "l H N ,H N->l H")
         # L x L x H
         output = output_horizontal + output_vertical
-        # output = torch.softmax(output, dim=0)
+
         output = output.view(length, length, self.kernel_dim)
         output[0, :, :, ] *= 2
         output[:, 0, :, ] *= 2
         output[0, 0] /= 4
+        if self.is_complex:
+            output = _c2r(output)
+            output = output[:, :, :, 0] * output[:, :, :, 1] if self.is_complex else output.squeeze(-1)
         if self.last_kernel is not None:
             self.last_kernel = output
 
@@ -326,12 +353,17 @@ class TwoDimensionalSSM(nn.Module):
             if self.bidirectional:
                 # Split kernels to four directions
                 kernels = list(
-                    torch.split(k, [self.n_ssm for i in range(4)], dim=0))  # 4 kernels, one for each direction.
+                    torch.split(k, [self.n_ssm for i in range(self.directions_amount)],
+                                dim=0))  # 4 kernels, one for each direction.
                 # for i in range(k.shape[0]):
                 #     plot_heatmap(k[i], f'kernel {i}')
                 # Transform Kernels from L x L x n_ssm -> L x L x H
                 kernels = [repeat(k, ' n l1 l2 ->  (h n) l1 l2', h=self.repeat) for k in kernels]
-                flip_dims = [[], [-2], [-1], [-2, -1]]
+                if self.directions_amount == 4:
+                    flip_dims = [[], [-2], [-1], [-2, -1]]
+                else:
+                    flip_dims = [[], [-2, -1]]
+
                 for idx, flip in enumerate(flip_dims):
                     k = kernels[idx]
                     curr_x = torch.flip(x, dims=flip)

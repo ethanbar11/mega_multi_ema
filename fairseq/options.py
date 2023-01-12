@@ -343,6 +343,8 @@ def add_preprocess_args(parser):
 def add_two_d_ssm_args(parser):
     group = parser.add_argument_group("Two Dimensional SSM Group")
     group.add_argument('--n_ssm', type=int, default=1, help='number of internal ssms')
+    group.add_argument('--complex_ssm', type=bool, default=False, help='Use complex ssm')
+    group.add_argument('--directions_amount', type=int, default=4, help='number directions, can be 2 or 4')
 
 
 def add_dataset_args(parser, train=False, gen=False):
